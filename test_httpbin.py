@@ -7,7 +7,7 @@ import contextlib
 import six
 import json
 from werkzeug.http import parse_dict_header
-from hashlib import md5, sha256
+from hashlib import md5, sha256, sha512
 from six import BytesIO
 
 import httpbin
@@ -41,6 +41,8 @@ def _hash(data, algorithm):
     """Encode binary data according to specified algorithm, use MD5 by default"""
     if algorithm == 'SHA-256':
         return sha256(data).hexdigest()
+    elif algorithm == 'SHA-512':
+        return sha512(data).hexdigest()
     else:
         return md5(data).hexdigest()
 
@@ -65,7 +67,7 @@ def _make_digest_auth_header(username, password, method, uri, nonce,
     assert nonce
     assert method
     assert uri
-    assert algorithm in ('MD5', 'SHA-256', None)
+    assert algorithm in ('MD5', 'SHA-256', 'SHA-512', None)
 
     a1 = ':'.join([username, realm or '', password])
     ha1 = _hash(a1.encode('utf-8'), algorithm)
@@ -204,6 +206,25 @@ class HttpbinTestCase(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
 
+    """
+    This is currently a sort of negative-test.
+    We validate that when running Flask-only server that
+    Transfer-Encoding: chunked requests are unsupported and
+    we return 501 Not Implemented
+    """
+    def test_post_chunked(self):
+        data = '{"animal":"dog"}'
+        response = self.app.post(
+            '/post',
+            content_type='application/json',
+            headers=[('Transfer-Encoding', 'chunked')],
+            data=data,
+        )
+        self.assertEqual(response.status_code, 501)
+        #self.assertEqual(response.status_code, 200)
+        #self.assertEqual(json.loads(response.data.decode('utf-8'))['data'], '{"animal":"dog"}')
+        #self.assertEqual(json.loads(response.data.decode('utf-8'))['json'], {"animal": "dog"})
+
     def test_set_cors_headers_after_request(self):
         response = self.app.get('/get')
         self.assertEqual(
@@ -282,7 +303,7 @@ class HttpbinTestCase(unittest.TestCase):
         username = 'user'
         password = 'passwd'
         for qop in None, 'auth', 'auth-int',:
-            for algorithm in None, 'MD5', 'SHA-256':
+            for algorithm in None, 'MD5', 'SHA-256', 'SHA-512':
                 for body in None, b'', b'request payload':
                     for stale_after in (None, 1, 4) if algorithm else (None,) :
                         self._test_digest_auth(username, password, qop, algorithm, body, stale_after)
@@ -371,7 +392,7 @@ class HttpbinTestCase(unittest.TestCase):
         username = 'user'
         password = 'passwd'
         for qop in None, 'auth', 'auth-int',:
-            for algorithm in None, 'MD5', 'SHA-256':
+            for algorithm in None, 'MD5', 'SHA-256', 'SHA-512':
                 for body in None, b'', b'request payload':
                     self._test_digest_auth_wrong_pass(username, password, qop, algorithm, body, 3)
 

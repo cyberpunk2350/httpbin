@@ -12,7 +12,7 @@ import base64
 import re
 import time
 import os
-from hashlib import md5, sha256
+from hashlib import md5, sha256, sha512
 from werkzeug.http import parse_authorization_header
 from werkzeug.datastructures import WWWAuthenticate
 
@@ -270,6 +270,8 @@ def check_basic_auth(user, passwd):
 def H(data, algorithm):
     if algorithm == 'SHA-256':
         return sha256(data).hexdigest()
+    elif algorithm == 'SHA-512':
+        return sha512(data).hexdigest()
     else:
         return md5(data).hexdigest()
 
@@ -358,7 +360,10 @@ def check_digest_auth(user, passwd):
         credentails = parse_authorization_header(request.headers.get('Authorization'))
         if not credentails:
             return
-        response_hash = response(credentails, passwd, dict(uri=request.script_root + request.path,
+        request_uri = request.script_root + request.path
+        if request.query_string:
+            request_uri +=  '?' + request.query_string
+        response_hash = response(credentails, passwd, dict(uri=request_uri,
                                                            body=request.data,
                                                            method=request.method))
         if credentails.get('response') == response_hash:
@@ -459,8 +464,8 @@ def digest_challenge_response(app, qop, algorithm, stale = False):
         str(time.time()).encode('ascii'),
         b':',
         os.urandom(10)
-    ]), "MD5")
-    opaque = H(os.urandom(10), "MD5")
+    ]), algorithm)
+    opaque = H(os.urandom(10), algorithm)
 
     auth = WWWAuthenticate("digest")
     auth.set_digest('me@kennethreitz.com', nonce, opaque=opaque,

@@ -15,7 +15,7 @@ import time
 import uuid
 import argparse
 
-from flask import Flask, Response, request, render_template, redirect, jsonify as flask_jsonify, make_response, url_for
+from flask import Flask, Response, request, render_template, redirect, jsonify as flask_jsonify, make_response, url_for, abort
 from flask_common import Common
 from six.moves import range as xrange
 from werkzeug.datastructures import WWWAuthenticate, MultiDict
@@ -84,6 +84,30 @@ if os.environ.get("BUGSNAG_API_KEY") is not None:
 # -----------
 # Middlewares
 # -----------
+"""
+https://github.com/kennethreitz/httpbin/issues/340
+Adds a middleware to provide chunked request encoding support running under
+gunicorn only.
+Werkzeug required environ 'wsgi.input_terminated' to be set otherwise it
+empties the input request stream.
+- gunicorn seems to support input_terminated but does not add the environ,
+  so we add it here.
+- flask will hang and does not seem to properly terminate the request, so
+  we explicitly deny chunked requests.
+"""
+@app.before_request
+def before_request():
+    if request.environ.get('HTTP_TRANSFER_ENCODING', '').lower() == 'chunked':
+        server = request.environ.get('SERVER_SOFTWARE', '')
+        if server.lower().startswith('gunicorn/'):
+            if 'wsgi.input_terminated' in request.environ:
+                app.logger.debug("environ wsgi.input_terminated already set, keeping: %s"
+                                   % request.environ['wsgi.input_terminated'])
+            else:
+                request.environ['wsgi.input_terminated'] = 1
+        else:
+            abort(501, "Chunked requests are not supported for server %s" % server)
+
 @app.after_request
 def set_cors_headers(response):
     response.headers['Access-Control-Allow-Origin'] = request.headers.get('Origin', '*')
@@ -454,6 +478,20 @@ def hidden_basic_auth(user='user', passwd='passwd'):
     return jsonify(authenticated=True, user=user)
 
 
+@app.route('/bearer')
+def bearer_auth():
+    """Authenticates using bearer authentication."""
+    if 'Authorization' not in request.headers:
+        response = app.make_response('')
+        response.headers['WWW-Authenticate'] = 'Bearer'
+        response.status_code = 401
+        return response
+    authorization = request.headers.get('Authorization')
+    token = authorization.lstrip('Bearer ')
+
+    return jsonify(authenticated=True, token=token)
+
+
 @app.route('/digest-auth/<qop>/<user>/<passwd>')
 def digest_auth_md5(qop=None, user='user', passwd='passwd'):
     return digest_auth(qop, user, passwd, "MD5", 'never')
@@ -467,44 +505,58 @@ def digest_auth_nostale(qop=None, user='user', passwd='passwd', algorithm='MD5')
 @app.route('/digest-auth/<qop>/<user>/<passwd>/<algorithm>/<stale_after>')
 def digest_auth(qop=None, user='user', passwd='passwd', algorithm='MD5', stale_after='never'):
     """Prompts the user for authorization using HTTP Digest auth"""
-    if algorithm not in ('MD5', 'SHA-256'):
+    require_cookie_handling = (request.args.get('require-cookie', '').lower() in
+                               ('1', 't', 'true'))
+    if algorithm not in ('MD5', 'SHA-256', 'SHA-512'):
         algorithm = 'MD5'
 
     if qop not in ('auth', 'auth-int'):
         qop = None
 
-    if 'Authorization' not in request.headers or \
-            'Cookie' not in request.headers:
+    authorization = request.headers.get('Authorization')
+    credentials = None
+    if authorization:
+        credentials = parse_authorization_header(authorization)
+
+    if (not authorization or
+            not credentials or
+            (require_cookie_handling and 'Cookie' not in request.headers)):
         response = digest_challenge_response(app, qop, algorithm)
         response.set_cookie('stale_after', value=stale_after)
+        response.set_cookie('fake', value='fake_value')
         return response
 
-    credentails = parse_authorization_header(request.headers.get('Authorization'))
-    if not credentails :
-        response = digest_challenge_response(app, qop, algorithm)
-        response.set_cookie('stale_after', value=stale_after)
+    if (require_cookie_handling and
+            request.cookies.get('fake') != 'fake_value'):
+        response = jsonify({'errors': ['missing cookie set on challenge']})
+        response.set_cookie('fake', value='fake_value')
+        response.status_code = 403
         return response
 
-    current_nonce = credentails.get('nonce')
+    current_nonce = credentials.get('nonce')
 
     stale_after_value = None
-    if 'stale_after' in request.cookies :
+    if 'stale_after' in request.cookies:
         stale_after_value = request.cookies.get('stale_after')
 
-    if 'last_nonce' in request.cookies and current_nonce == request.cookies.get('last_nonce') or \
-            stale_after_value == '0' :
+    if ('last_nonce' in request.cookies and
+            current_nonce == request.cookies.get('last_nonce') or
+            stale_after_value == '0'):
         response = digest_challenge_response(app, qop, algorithm, True)
         response.set_cookie('stale_after', value=stale_after)
         response.set_cookie('last_nonce',  value=current_nonce)
+        response.set_cookie('fake', value='fake_value')
         return response
 
-    if not check_digest_auth(user, passwd) :
+    if not check_digest_auth(user, passwd):
         response = digest_challenge_response(app, qop, algorithm, False)
         response.set_cookie('stale_after', value=stale_after)
         response.set_cookie('last_nonce', value=current_nonce)
+        response.set_cookie('fake', value='fake_value')
         return response
 
     response = jsonify(authenticated=True, user=user)
+    response.set_cookie('fake', value='fake_value')
     if stale_after_value :
         response.set_cookie('stale_after', value=next_stale_after_value(stale_after_value))
 
