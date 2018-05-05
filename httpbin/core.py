@@ -519,7 +519,7 @@ def digest_auth(qop=None, user='user', passwd='passwd', algorithm='MD5', stale_a
         credentials = parse_authorization_header(authorization)
 
     if (not authorization or
-            not credentials or
+            not credentials or credentials.type.lower() != 'digest' or
             (require_cookie_handling and 'Cookie' not in request.headers)):
         response = digest_challenge_response(app, qop, algorithm)
         response.set_cookie('stale_after', value=stale_after)
@@ -633,7 +633,9 @@ def etag(etag):
 
     if if_none_match:
         if etag in if_none_match or '*' in if_none_match:
-            return status_code(304)
+            response = status_code(304)
+            response.headers['ETag'] = etag
+            return response
     elif if_match:
         if etag not in if_match and '*' not in if_match:
             return status_code(412)
@@ -713,7 +715,7 @@ def range_request(numbytes):
             'Accept-Ranges' : 'bytes'
             })
         response.status_code = 404
-        response.data = 'number of bytes must be in the range (0, 10240]'
+        response.data = 'number of bytes must be in the range (0, 102400]'
         return response
 
     params = CaseInsensitiveDict(request.args.items())
