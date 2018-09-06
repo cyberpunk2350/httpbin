@@ -8,9 +8,11 @@ decorator = "*"
 brotlipy = "*"
 gevent = "*"
 Flask = "*"
-Flask-Common = "*"
 meinheld = "*"
 werkzeug = ">=0.14.1"
+six = "*"
+flasgger = "*"
+pyyaml = {git = "https://github.com/yaml/pyyaml.git"}
 
-[packages.raven]
-extras = [ "flask",]
+[dev-packages]
+rope = "*"

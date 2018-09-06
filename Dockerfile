@@ -1,17 +1,16 @@
-FROM python:3-alpine
+FROM ubuntu:18.04
 
-ENV WEB_CONCURRENCY=4
+LABEL name="httpbin"
+LABEL version="0.9.2"
+LABEL description="A simple HTTP service."
+LABEL org.kennethreitz.vendor="Kenneth Reitz"
+
+RUN apt update -y && apt install python3-pip -y
+
+EXPOSE 80
 
 ADD . /httpbin
 
-RUN apk add -U ca-certificates libffi libstdc++ && \
-    apk add --virtual build-deps build-base libffi-dev && \
-    # Pip
-    pip install --no-cache-dir gunicorn /httpbin && \
-    # Cleaning up
-    apk del build-deps && \
-    rm -rf /var/cache/apk/*
+RUN pip3 install --no-cache-dir gunicorn /httpbin
 
-EXPOSE 8080
-
-CMD ["gunicorn", "-b", "0.0.0.0:8080", "httpbin:app"]
+CMD ["gunicorn", "-b", "0.0.0.0:80", "httpbin:app", "-k", "gevent"]

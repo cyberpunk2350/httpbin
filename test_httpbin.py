@@ -114,6 +114,10 @@ class HttpbinTestCase(unittest.TestCase):
         httpbin.app.debug = True
         self.app = httpbin.app.test_client()
 
+    def test_index(self):   
+        response = self.app.get('/', headers={'User-Agent': 'test'})
+        self.assertEqual(response.status_code, 200)
+ 
     def get_data(self, response):
         if 'get_data' in dir(response):
             return response.get_data()
@@ -265,6 +269,30 @@ class HttpbinTestCase(unittest.TestCase):
         self.assertEqual(
             response.headers.get('Access-Control-Allow-Headers'), 'X-Test-Header'
         )
+
+    def test_headers(self):
+        headers = {
+            "Accept": "*/*",
+            "Host": "localhost:1234",
+            "User-Agent": "curl/7.54.0",
+            "Via": "bar"
+        }
+        response = self.app.get('/headers', headers=headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue({'Accept', 'Host', 'User-Agent'}.issubset(set(response.json['headers'].keys())))
+        self.assertNotIn('Via', response.json)
+
+    def test_headers_show_env(self):
+        headers = {
+            "Accept": "*/*",
+            "Host": "localhost:1234",
+            "User-Agent": "curl/7.54.0",
+            "Via": "bar"
+        }
+        response = self.app.get('/headers?show_env=true', headers=headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue({'Accept', 'Host', 'User-Agent', 'Via'}.issubset(set(response.json['headers'].keys())))
+
     def test_user_agent(self):
         response = self.app.get(
             '/user-agent', headers={'User-Agent': 'test'}
@@ -279,6 +307,37 @@ class HttpbinTestCase(unittest.TestCase):
     def test_brotli(self):
         response = self.app.get('/brotli')
         self.assertEqual(response.status_code, 200)
+
+    def test_bearer_auth(self):
+        token = 'abcd1234'
+        response = self.app.get(
+            '/bearer',
+            headers={'Authorization': 'Bearer ' + token}
+        )
+        self.assertEqual(response.status_code, 200)
+        assert json.loads(response.data.decode('utf-8'))['token'] == token
+
+    def test_bearer_auth_with_wrong_authorization_type(self):
+        """Sending an non-Bearer Authorization header to /bearer should return a 401"""
+        auth_headers = (
+            ('Authorization', 'Basic 1234abcd'),
+            ('Authorization', ''),
+            ('',  '')
+        )
+        for header in auth_headers:
+            response = self.app.get(
+                '/bearer',
+                headers={header[0]: header[1]}
+            )
+            self.assertEqual(response.status_code, 401)
+
+    def test_bearer_auth_with_missing_token(self):
+        """Sending an 'Authorization: Bearer' header with no token to /bearer should return a 401"""
+        response = self.app.get(
+            '/bearer',
+            headers={'Authorization': 'Bearer'}
+        )
+        self.assertEqual(response.status_code, 401)
 
     def test_digest_auth_with_wrong_password(self):
         auth_header = 'Digest username="user",realm="wrong",nonce="wrong",uri="/digest-auth/user/passwd/MD5",response="wrong",opaque="wrong"'
@@ -665,19 +724,6 @@ class HttpbinTestCase(unittest.TestCase):
             }
         )
         self.assertEqual(response.status_code, 416)
-
-    def test_tracking_disabled(self):
-        with _setenv('HTTPBIN_TRACKING', None):
-            response = self.app.get('/')
-        data = response.data.decode('utf-8')
-        self.assertNotIn('google-analytics', data)
-        self.assertNotIn('perfectaudience', data)
-
-    def test_tracking_enabled(self):
-        with _setenv('HTTPBIN_TRACKING', '1'):
-            response = self.app.get('/')
-        data = response.data.decode('utf-8')
-        self.assertIn('perfectaudience', data)
 
     def test_etag_if_none_match_matches(self):
         response = self.app.get(
